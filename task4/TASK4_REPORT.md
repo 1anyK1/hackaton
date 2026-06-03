@@ -2,102 +2,122 @@
 
 ## Цель
 
-Реализована программа рации для ADALM-Pluto SDR:
+Реализована C++ рация для ADALM-Pluto SDR:
 
-- TX-часть берет звук с микрофона в реальном времени и передает его через Pluto;
-- RX-часть принимает сигнал с Pluto, восстанавливает аудио и выводит его на динамик ноутбука.
+- TX захватывает звук с микрофона в реальном времени и передает NBFM IQ через Pluto;
+- RX принимает IQ с Pluto, демодулирует FM и выводит очищенный голос на динамик.
+- Дополнительно добавлен AM/DSB режим для отладки и случаев, когда FM тонет в шуме.
 
 ## Файлы
 
-- `pluto_walkie_talkie.py` - основное CLI-приложение с режимами `tx`, `rx`, `trx`, `devices`;
-- `dsp.py` - NBFM-модулятор, FM-демодулятор, ресемплинг и аудиофильтры;
-- `test_dsp.py` - автономная проверка DSP-цепочки без Pluto;
-- `requirements.txt` - Python-зависимости, включая `sounddevice` и запасной backend `soundcard`;
-- `README.md` - инструкция запуска.
+- `cpp/main.cpp` - основная C++ программа;
+- `Makefile` - сборка через `make`;
+- `CMakeLists.txt` - альтернативная сборка через CMake;
+- `README.md` - команды запуска и настройки.
+
+Python-версия удалена, в `task4` используется только C++.
 
 ## Архитектура
 
-Для голосовой связи выбрана узкополосная FM-модуляция.
+Используются две runtime-библиотеки:
 
-TX pipeline:
+- PortAudio для микрофона и динамика;
+- libiio для управления ADALM-Pluto.
 
-1. Аудиобэкенд `sounddevice` или `soundcard` читает блоки микрофона `float32`.
-2. Аудио приводится к mono и ограничивается диапазоном `[-1, 1]`.
-3. Применяется очистка микрофона: речевой band-pass `120...3400 Hz`, мягкий noise gate и AGC.
-4. Применяется pre-emphasis фильтр 75 мкс.
-5. Аудио ресемплируется с `48 kHz` до `960 kHz`.
-6. FM-модулятор интегрирует аудиосигнал в фазу:
+Заголовки `portaudio.h` и `iio.h` не требуются: функции загружаются динамически через `dlopen`.
+
+## TX Pipeline
+
+1. PortAudio читает блоки микрофона `float32` с частотой `48 kHz`.
+2. Микрофонный сигнал проходит:
+   - DC blocker;
+   - каскадный ФНЧ речи;
+   - noise gate по `--mic-gate`;
+   - AGC к уровню `--mic-target-rms`;
+   - мягкий limiter `tanh`.
+3. Аудио преобразуется в выбранную модуляцию:
+
+   FM:
 
    `phase[n] = phase[n-1] + 2*pi*deviation*audio[n]/sdr_rate`
 
-7. Формируется комплексный IQ:
+   AM:
 
-   `iq[n] = A * exp(j * phase[n])`
+   `iq[n] = carrier + depth*audio[n]`
 
-8. IQ масштабируется до диапазона DAC Pluto и передается через `sdr.tx()`.
+4. Формируется комплексный IQ:
 
-RX pipeline:
+   `iq[n] = exp(j*phase[n])`
 
-1. `sdr.rx()` получает комплексные IQ-блоки.
-2. Перед FM-демодуляцией применяется комплексный low-pass фильтр IQ, по умолчанию `55 kHz`. Это убирает большую часть широкополосного шума до фазового детектора.
-3. FM-демодулятор вычисляет фазовую разность соседних IQ-сэмплов:
+5. IQ масштабируется и отправляется в Pluto TX через libiio.
 
-   `audio_sdr[n] = angle(iq[n] * conj(iq[n-1])) * sdr_rate / (2*pi*deviation)`
+## RX Pipeline
 
-4. Сигнал ресемплируется с `960 kHz` до `48 kHz`.
-5. Применяется deemphasis фильтр 75 мкс.
-6. Применяется речевой band-pass `250...3400 Hz`.
-7. Smooth squelch закрывает выход при малом RMS демодулированного аудио.
-8. Аудио ограничивается диапазоном `[-1, 1]` и отправляется в динамик через выбранный аудиобэкенд.
+1. libiio читает комплексные IQ-блоки с Pluto RX.
+2. IQ проходит каскадный комплексный ФНЧ `--channel-filter`.
+3. FM limiter нормализует амплитуду IQ.
+4. Демодулятор восстанавливает аудио:
 
-## Запуск
+   FM вычисляет фазовую разность:
 
-Передатчик:
+   `audio[n] = angle(iq[n] * conj(iq[n-1]))`
 
-```bash
-python task4/pluto_walkie_talkie.py tx --freq 915e6 --tx-gain -25 --mic-gate 0.008 --mic-target-rms 0.14 --meter
-```
+   AM использует envelope:
 
-Приемник:
+   `audio[n] = abs(iq[n])`
 
-```bash
-python task4/pluto_walkie_talkie.py rx --freq 915e6 --volume 0.35 --squelch 0.04 --channel-filter 45000 --meter
-```
+5. Сигнал decimate'ится с `2.4 MHz` до `48 kHz`.
+6. Аудио разделяется на:
+   - речевую полосу `voice`;
+   - шумовую верхнюю полосу `noise`.
+7. Gate открывается только если `voice > --squelch` и `voice/noise > --noise-ratio`.
+8. На динамик отправляется только очищенный голосовой сигнал.
 
-Список аудиоустройств:
+## Сборка
 
 ```bash
-python task4/pluto_walkie_talkie.py devices
+cd task4
+make
 ```
 
-Если в системе нет PortAudio, используйте запасной backend:
+## Проверка Радиоканала
+
+RX:
 
 ```bash
-python task4/pluto_walkie_talkie.py tx --audio-backend soundcard --freq 915e6
-python task4/pluto_walkie_talkie.py rx --audio-backend soundcard --freq 915e6
+./pluto_walkie_cpp rx --uri ip:192.168.3.1 --freq 915e6 --sdr-rate 2400000 --volume 0.18 --squelch 0 --channel-filter 30000 --rx-audio-cutoff 2200 --meter
 ```
 
-## Проверка
-
-Автономный тест:
+TX test tone:
 
 ```bash
-python task4/test_dsp.py
+./pluto_walkie_cpp tx --uri ip:192.168.2.1 --freq 915e6 --sdr-rate 2400000 --tx-gain -8 --tx-amplitude 0.8 --tx-tone 1000 --meter
 ```
 
-Результат в текущем окружении:
+## Голосовая Связь
 
-```text
-..
-----------------------------------------------------------------------
-Ran 2 tests in 0.063s
+RX:
 
-OK
+```bash
+./pluto_walkie_cpp rx --uri ip:192.168.3.1 --freq 915e6 --sdr-rate 2400000 --gain-mode manual --rx-gain 12 --volume 0.22 --squelch 0.035 --noise-ratio 1.15 --channel-filter 30000 --rx-audio-cutoff 2200 --meter
 ```
 
-## Практические замечания
+TX:
 
-- Для демонстрации лучше использовать два Pluto: один запускается в `tx`, второй в `rx`.
-- На одном Pluto режим `trx` требует разнесения TX/RX частот, иначе собственный передатчик будет забивать приемник.
-- Начинать следует с малого TX gain, например `-30...-20 dB`.
-- Для работы в эфире нужно использовать только разрешенные частоты и лабораторные условия: аттенюаторы, экранирование или согласованную антенную схему.
+```bash
+./pluto_walkie_cpp tx --uri ip:192.168.2.1 --freq 915e6 --sdr-rate 2400000 --tx-gain -8 --tx-amplitude 0.8 --mic-gate 0.003 --mic-target-rms 0.16 --tx-audio-cutoff 2600 --meter
+```
+
+AM-режим:
+
+```bash
+./pluto_walkie_cpp rx --mod am --uri ip:192.168.3.1 --freq 915e6 --sdr-rate 2400000 --gain-mode manual --rx-gain 20 --volume 0.35 --squelch 0.01 --noise-ratio 0.6 --channel-filter 60000 --rx-audio-cutoff 2400 --meter
+./pluto_walkie_cpp tx --mod am --uri ip:192.168.2.1 --freq 915e6 --sdr-rate 2400000 --tx-gain -5 --tx-amplitude 0.85 --am-carrier 0.65 --am-depth 0.22 --mic-gate 0.001 --mic-target-rms 0.14 --tx-audio-cutoff 2400 --meter
+```
+
+## Практические Замечания
+
+- Частота `2.4 MS/s` выбрана потому, что Pluto через прямой libiio не принимает `960 kS/s`; минимальное значение на стенде около `2.083 MS/s`.
+- Перед настройкой микрофона нужно добиться слышимого тестового тона.
+- У Pluto более отрицательный `--tx-gain` означает меньшую мощность.
+- Для меньшего шума используйте ручной RX gain и узкий `--channel-filter`.

@@ -1,3 +1,5 @@
 .venv/
 venv/
 .env
+task4/pluto_walkie_cpp
+task4/build-cpp/
