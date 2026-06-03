@@ -46,13 +46,13 @@ python task4/pluto_walkie_talkie.py rx --output-device 5
 Передатчик:
 
 ```bash
-python task4/pluto_walkie_talkie.py tx --freq 915e6 --tx-gain -20 --meter
+python task4/pluto_walkie_talkie.py tx --freq 915e6 --tx-gain -20 --mic-gate 0.006 --meter
 ```
 
 Приемник:
 
 ```bash
-python task4/pluto_walkie_talkie.py rx --freq 915e6 --volume 0.7 --meter
+python task4/pluto_walkie_talkie.py rx --freq 915e6 --volume 0.45 --squelch 0.03 --meter
 ```
 
 Полудуплексная рация обычно запускается на двух Pluto: один ноутбук в режиме `tx`, второй в режиме `rx`.
@@ -78,7 +78,40 @@ python task4/pluto_walkie_talkie.py trx --tx-freq 915e6 --rx-freq 916e6 --tx-gai
 - `--rx-gain`: ручное усиление RX, используется только с `--gain-mode manual`;
 - `--rx-buffer`: размер буфера приема Pluto, по умолчанию `20480` IQ-сэмплов;
 - `--audio-backend`: `auto`, `soundcard` или `sounddevice`;
-- `--squelch`: простой порог шумоподавителя по RMS IQ.
+- `--channel-filter`: комплексный low-pass фильтр IQ перед FM-демодуляцией, по умолчанию `55000` Гц;
+- `--tx-voice-low`, `--tx-voice-high`: полоса микрофона перед передачей, по умолчанию `120...3400` Гц;
+- `--rx-voice-low`, `--rx-voice-high`: полоса речи после приема, по умолчанию `250...3400` Гц;
+- `--mic-gate`: шумовой gate микрофона, по умолчанию `0.006`;
+- `--mic-target-rms`: целевой RMS микрофонного AGC, по умолчанию `0.16`;
+- `--squelch`: порог шумоподавителя по RMS демодулированного аудио, по умолчанию `0.03`.
+
+## Настройка на меньший шум
+
+Рекомендуемый приемник:
+
+```bash
+python task4/pluto_walkie_talkie.py rx --audio-backend soundcard --freq 915e6 --volume 0.35 --squelch 0.04 --channel-filter 45000 --meter
+```
+
+Если речь пропадает или обрезается, уменьшите `--squelch`:
+
+```bash
+python task4/pluto_walkie_talkie.py rx --audio-backend soundcard --freq 915e6 --volume 0.35 --squelch 0.015 --channel-filter 55000 --meter
+```
+
+Если шипение сильное даже при наличии сигнала, попробуйте ручное усиление RX:
+
+```bash
+python task4/pluto_walkie_talkie.py rx --audio-backend soundcard --freq 915e6 --gain-mode manual --rx-gain 12 --volume 0.35 --squelch 0.04 --channel-filter 45000 --meter
+```
+
+Рекомендуемый передатчик с более чистым микрофоном:
+
+```bash
+python task4/pluto_walkie_talkie.py tx --audio-backend soundcard --freq 915e6 --tx-gain -25 --mic-gate 0.008 --mic-target-rms 0.14 --meter
+```
+
+Если начало слов подрезается, уменьшите `--mic-gate` до `0.003...0.005`.
 
 ## Тест DSP без железа
 

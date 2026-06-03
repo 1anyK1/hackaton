@@ -12,6 +12,14 @@ class DspTest(unittest.TestCase):
             fm_deviation_hz=5_000,
             preemphasis_tau=0.0,
             deemphasis_tau=0.0,
+            tx_voice_low_hz=0.0,
+            tx_voice_high_hz=0.0,
+            rx_voice_low_hz=0.0,
+            rx_voice_high_hz=0.0,
+            channel_filter_hz=0.0,
+            mic_gate_threshold=0.0,
+            mic_target_rms=0.35,
+            mic_max_gain=1.0,
         )
         modulator = FmModulator(config)
         demodulator = FmDemodulator(config)

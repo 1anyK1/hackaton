@@ -20,7 +20,7 @@ import time
 import adi
 import numpy as np
 
-from dsp import FmDemodulator, FmModulator, RadioConfig, rms_level
+from dsp import AudioSquelch, FmDemodulator, FmModulator, RadioConfig, rms_level
 
 
 DEFAULT_URI = "ip:192.168.3.1"
@@ -98,6 +98,11 @@ def tx_worker(args: argparse.Namespace, stop: StopFlag) -> None:
         sdr_rate=args.sdr_rate,
         fm_deviation_hz=args.deviation,
         tx_amplitude=args.tx_amplitude,
+        tx_voice_low_hz=args.tx_voice_low,
+        tx_voice_high_hz=args.tx_voice_high,
+        mic_gate_threshold=args.mic_gate,
+        mic_target_rms=args.mic_target_rms,
+        mic_max_gain=args.mic_max_gain,
     )
     modulator = FmModulator(config)
     sdr = configure_tx_sdr(args)
@@ -159,8 +164,12 @@ def rx_worker(args: argparse.Namespace, stop: StopFlag) -> None:
         audio_rate=args.audio_rate,
         sdr_rate=args.sdr_rate,
         fm_deviation_hz=args.deviation,
+        rx_voice_low_hz=args.rx_voice_low,
+        rx_voice_high_hz=args.rx_voice_high,
+        channel_filter_hz=args.channel_filter,
     )
     demodulator = FmDemodulator(config)
+    squelch = AudioSquelch(args.squelch, args.squelch_close)
     sdr = configure_rx_sdr(args)
     audio_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=args.queue_blocks)
 
@@ -191,8 +200,7 @@ def rx_worker(args: argparse.Namespace, stop: StopFlag) -> None:
         while not stop.event.is_set():
             iq = sdr.rx()
             audio = demodulator.demodulate(iq)
-            if args.squelch > 0 and rms_level(iq) < args.squelch:
-                audio[:] = 0.0
+            audio = squelch.process(audio)
 
             for start in range(0, len(audio), args.audio_block):
                 chunk = audio[start : start + args.audio_block]
@@ -214,6 +222,11 @@ def tx_worker_soundcard(args: argparse.Namespace, stop: StopFlag) -> None:
         sdr_rate=args.sdr_rate,
         fm_deviation_hz=args.deviation,
         tx_amplitude=args.tx_amplitude,
+        tx_voice_low_hz=args.tx_voice_low,
+        tx_voice_high_hz=args.tx_voice_high,
+        mic_gate_threshold=args.mic_gate,
+        mic_target_rms=args.mic_target_rms,
+        mic_max_gain=args.mic_max_gain,
     )
     modulator = FmModulator(config)
     sdr = configure_tx_sdr(args)
@@ -251,8 +264,12 @@ def rx_worker_soundcard(args: argparse.Namespace, stop: StopFlag) -> None:
         audio_rate=args.audio_rate,
         sdr_rate=args.sdr_rate,
         fm_deviation_hz=args.deviation,
+        rx_voice_low_hz=args.rx_voice_low,
+        rx_voice_high_hz=args.rx_voice_high,
+        channel_filter_hz=args.channel_filter,
     )
     demodulator = FmDemodulator(config)
+    squelch = AudioSquelch(args.squelch, args.squelch_close)
     sdr = configure_rx_sdr(args)
     speaker = select_soundcard_speaker(sc, args.output_device)
 
@@ -269,8 +286,7 @@ def rx_worker_soundcard(args: argparse.Namespace, stop: StopFlag) -> None:
         while not stop.event.is_set():
             iq = sdr.rx()
             audio = demodulator.demodulate(iq)
-            if args.squelch > 0 and rms_level(iq) < args.squelch:
-                audio[:] = 0.0
+            audio = squelch.process(audio)
             player.play((audio * args.volume).reshape(-1, 1))
             if args.meter:
                 print(f"\rRX iq rms={rms_level(iq):.3f} audio rms={rms_level(audio):.3f}", end="")
@@ -350,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rf-bandwidth", type=int, default=DEFAULT_RF_BW)
     parser.add_argument("--deviation", type=float, default=5_000.0)
     parser.add_argument("--tx-gain", type=float, default=-20.0)
-    parser.add_argument("--rx-gain", type=float, default=35.0)
+    parser.add_argument("--rx-gain", type=float, default=18.0)
     parser.add_argument("--gain-mode", choices=("slow_attack", "fast_attack", "manual"), default="slow_attack")
     parser.add_argument("--rx-buffer", type=int, default=DEFAULT_RX_BUFFER)
     parser.add_argument("--audio-block", type=int, default=DEFAULT_AUDIO_BLOCK)
@@ -358,9 +374,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-device")
     parser.add_argument("--output-device")
     parser.add_argument("--audio-backend", choices=("auto", "soundcard", "sounddevice"), default="auto")
-    parser.add_argument("--volume", type=float, default=0.6)
+    parser.add_argument("--volume", type=float, default=0.45)
     parser.add_argument("--tx-amplitude", type=float, default=0.55)
-    parser.add_argument("--squelch", type=float, default=0.0, help="Mute RX when IQ RMS is below this value")
+    parser.add_argument("--channel-filter", type=float, default=55_000.0, help="RX complex low-pass cutoff before FM demodulation")
+    parser.add_argument("--tx-voice-low", type=float, default=120.0, help="TX microphone high-pass cutoff in Hz")
+    parser.add_argument("--tx-voice-high", type=float, default=3_400.0, help="TX microphone low-pass cutoff in Hz")
+    parser.add_argument("--rx-voice-low", type=float, default=250.0, help="RX audio high-pass cutoff in Hz")
+    parser.add_argument("--rx-voice-high", type=float, default=3_400.0, help="RX audio low-pass cutoff in Hz")
+    parser.add_argument("--mic-gate", type=float, default=0.006, help="TX microphone noise gate threshold")
+    parser.add_argument("--mic-target-rms", type=float, default=0.16, help="TX microphone AGC target RMS")
+    parser.add_argument("--mic-max-gain", type=float, default=8.0, help="TX microphone AGC maximum gain")
+    parser.add_argument("--squelch", type=float, default=0.03, help="Mute RX when demodulated audio RMS is below this value")
+    parser.add_argument("--squelch-close", type=float, default=None, help="Lower close threshold for squelch hysteresis")
     parser.add_argument("--meter", action="store_true", help="Print live level meters")
     return parser
 

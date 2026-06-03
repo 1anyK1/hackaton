@@ -2,8 +2,10 @@ from crypto_protocol import (
     ChatCrypto,
     decrypt_aes128,
     decrypt_caesar,
+    decrypt_snow3g,
     encrypt_aes128,
     encrypt_caesar,
+    encrypt_snow3g,
 )
 
 
@@ -23,6 +25,17 @@ def test_caesar_roundtrip():
 
     assert encrypted.startswith("CAE1:7:")
     assert decrypt_caesar(encrypted) == "Attack at dawn"
+
+
+def test_snow3g_roundtrip_hides_plaintext():
+    secret = "team-snow-key"
+    message = "Snow mode message"
+
+    encrypted = encrypt_snow3g(message, secret)
+
+    assert encrypted.startswith("SNOW1:")
+    assert message not in encrypted
+    assert decrypt_snow3g(encrypted, secret) == message
 
 
 def test_chat_crypto_detects_payload_type():

@@ -54,7 +54,7 @@ def print_message(exit_event, mySDR, crypto):
             try:
                 decrypted_message = crypto.decrypt(receivedMessage)
             except Exception as error:
-                if receivedMessage.startswith(("AES1:", "CAE1:")):
+                if receivedMessage.startswith(("AES1:", "CAE1:", "SNOW1:")):
                     print(f'user: <damaged encrypted packet: {error}>')
             else:
                 last_payload = receivedMessage
@@ -142,8 +142,9 @@ def encryption_menu(crypto):
         print(f"Current mode: {crypto.label}")
         print("1 - Open channel")
         print("2 - AES-128-GCM")
-        print("3 - Caesar cipher")
-        print("4 - Back")
+        print("3 - Snow3G-style stream cipher")
+        print("4 - Caesar cipher")
+        print("5 - Back")
         selection = int(input("Select encryption mode: "))
 
         if selection == 1:
@@ -159,11 +160,19 @@ def encryption_menu(crypto):
             crypto.key = key
             print("AES-128-GCM enabled.")
         elif selection == 3:
+            key = input("Enter shared Snow3G key/password: ")
+            if not key:
+                print("Key must not be empty.")
+                continue
+            crypto.mode = "snow3g"
+            crypto.key = key
+            print("Snow3G-style stream cipher enabled.")
+        elif selection == 4:
             shift = int(input("Enter Caesar shift (0-25): "))
             crypto.mode = "caesar"
             crypto.key = str(shift % 26)
             print(f"Caesar cipher enabled with shift {shift % 26}.")
-        elif selection == 4:
+        elif selection == 5:
             break
 
 
